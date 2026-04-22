@@ -145,7 +145,6 @@ void ImuNode::spin()
     static Eigen::Vector3f accel_fused = Eigen::Vector3f::Zero();
     
     float dt_filtered = 0.01f;
-    int log_counter = 0;
     
     while (true) {
         
@@ -215,16 +214,10 @@ void ImuNode::spin()
         auto log_elapsed = std::chrono::duration<float>(log_now - last_log_time).count();
         
         if (log_elapsed >= 0.5f) {
+            ESP_LOGI(TAG, "Raw Gyro (deg/s) | X: %+7.2f | Y: %+7.2f | Z: %+7.2f", gyro.Gyro_X, gyro.Gyro_Y, gyro.Gyro_Z);
+            ESP_LOGI(TAG, "Raw Accel (m/s²) | X: %+7.2f | Y: %+7.2f | Z: %+7.2f | Norm: %.2f", acc.Accel_X, acc.Accel_Y, acc.Accel_Z, norm);
             ESP_LOGI(TAG, "Euler Angles (deg) | Roll: %+7.2f | Pitch: %+7.2f | Yaw: %+7.2f | dt=%.3fs",
                      roll_deg, pitch_deg, yaw_deg, dt_filtered);
-            
-            log_counter++;
-            if (log_counter % 50 == 0) {
-                ESP_LOGI(TAG, "Raw Gyro (deg/s) | X: %+7.2f | Y: %+7.2f | Z: %+7.2f",
-                         gyro.Gyro_X, gyro.Gyro_Y, gyro.Gyro_Z);
-                ESP_LOGI(TAG, "Raw Accel (m/s²) | X: %+7.2f | Y: %+7.2f | Z: %+7.2f | Norm: %.2f",
-                         acc.Accel_X, acc.Accel_Y, acc.Accel_Z, norm);
-            }
             
             last_log_time = log_now;
         }
