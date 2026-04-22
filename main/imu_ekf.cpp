@@ -67,15 +67,25 @@ void ImuEKF::predict(const Eigen::Vector3f &gyro)
 
     Eigen::Vector3f w = gyro - bg;
 
-    Eigen::Matrix4f Omega;
-    Omega << 
-         0,    -w(0), -w(1), -w(2),
-         w(0),  0,     w(2), -w(1),
-         w(1), -w(2),  0,     w(0),
-         w(2),  w(1), -w(0),  0;
+    Eigen::Quaternionf q_old(q(3), q(0), q(1), q(2));
 
-    q = q + 0.5f * Omega * q * dt;
-    q.normalize();
+    float theta = w.norm() * dt;
+    Eigen::Quaternionf dq;
+    if (theta < 1e-6f) {
+        dq = Eigen::Quaternionf(1.0f, 0.0f, 0.0f, 0.0f);
+    } else {
+        Eigen::Vector3f axis = w / w.norm();
+        float half_theta = theta * 0.5f;
+        dq = Eigen::Quaternionf(cos(half_theta),
+                                axis(0) * sin(half_theta),
+                                axis(1) * sin(half_theta),
+                                axis(2) * sin(half_theta));
+    }
+
+    Eigen::Quaternionf q_new = q_old * dq;
+    q_new.normalize();
+
+    q << q_new.x(), q_new.y(), q_new.z(), q_new.w();
 
     x.segment<4>(0) = q;
     x.segment<3>(4) = bg;
@@ -99,7 +109,6 @@ void ImuEKF::predict(const Eigen::Vector3f &gyro)
     Eigen::Matrix<float,7,7> Q = Eigen::Matrix<float,7,7>::Zero();
     Q.block<3,3>(0,0) = Eigen::Matrix3f::Identity() * 1e-6f;
     Q.block<3,3>(4,4) = Eigen::Matrix3f::Identity() * 1e-6f;
-    Q(3,3) = 1e-6f;
 
     P = F * P * F.transpose() + Q;
 }
@@ -126,52 +135,20 @@ void ImuEKF::update(const Eigen::Vector3f &accel)
     float q2 = q(2);
     float q3 = q(3);
 
-    float q0q0 = q0*q0;
-    float q1q1 = q1*q1;
-    float q2q2 = q2*q2;
-    float q3q3 = q3*q3;
-    float q0q1 = q0*q1;
-    float q0q2 = q0*q2;
-    float q0q3 = q0*q3;
-    float q1q2 = q1*q2;
-    float q1q3 = q1*q3;
-    float q2q3 = q2*q3;
+    H(0,0) = 2.0f * q2;
+    H(0,1) = -2.0f * q3;
+    H(0,2) = 2.0f * q0;
+    H(0,3) = -2.0f * q1;
 
-    float norm_h = sqrt(4.0f*(q1q3 - q0q2)*(q1q3 - q0q2) + 
-                        4.0f*(q0q1 + q2q3)*(q0q1 + q2q3) + 
-                        (q0q0 - q1q1 - q2q2 + q3q3)*(q0q0 - q1q1 - q2q2 + q3q3));
-    
-    float inv_norm = 1.0f / norm_h;
+    H(1,0) = -2.0f * q1;
+    H(1,1) = -2.0f * q0;
+    H(1,2) = -2.0f * q3;
+    H(1,3) = -2.0f * q2;
 
-    float dh_dq0 = 2.0f * (-q2 * inv_norm);
-    float dh_dq1 = 2.0f * (q3 * inv_norm);
-    float dh_dq2 = 2.0f * (-q0 * inv_norm);
-    float dh_dq3 = 2.0f * (q1 * inv_norm);
-    
-    H(0,0) = dh_dq0;
-    H(0,1) = dh_dq1;
-    H(0,2) = dh_dq2;
-    H(0,3) = dh_dq3;
-    
-    dh_dq0 = 2.0f * (q1 * inv_norm);
-    dh_dq1 = 2.0f * (q0 * inv_norm);
-    dh_dq2 = 2.0f * (q3 * inv_norm);
-    dh_dq3 = 2.0f * (q2 * inv_norm);
-    
-    H(1,0) = dh_dq0;
-    H(1,1) = dh_dq1;
-    H(1,2) = dh_dq2;
-    H(1,3) = dh_dq3;
-    
-    dh_dq0 = 2.0f * (q0 * inv_norm);
-    dh_dq1 = 2.0f * (-q1 * inv_norm);
-    dh_dq2 = 2.0f * (-q2 * inv_norm);
-    dh_dq3 = 2.0f * (q3 * inv_norm);
-    
-    H(2,0) = dh_dq0;
-    H(2,1) = dh_dq1;
-    H(2,2) = dh_dq2;
-    H(2,3) = dh_dq3;
+    H(2,0) = -2.0f * q0;
+    H(2,1) = 2.0f * q1;
+    H(2,2) = 2.0f * q2;
+    H(2,3) = -2.0f * q3;
 
     for (int i = 4; i < 7; i++) {
         H.col(i).setZero();
