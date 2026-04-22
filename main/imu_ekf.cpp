@@ -34,7 +34,7 @@
 ImuEKF::ImuEKF()
 {
     x = Eigen::VectorXf::Zero(7);
-    x(3) = 1.0f; // quaternion w
+    x(3) = 1.0f;
 
     P = Eigen::MatrixXf::Identity(7,7) * 0.01f;
 
@@ -54,9 +54,9 @@ Eigen::Vector4f ImuEKF::getQuaternion() const
 Eigen::Vector3f ImuEKF::gravityModel(const Eigen::Vector4f &q) const
 {
     return {
-        2.0f * (q(0)*q(2) - q(3)*q(1)),
-        2.0f * (q(3)*q(0) + q(1)*q(2)),
-        q(3)*q(3) - q(0)*q(0) - q(1)*q(1) + q(2)*q(2)
+        2.0f * (q(1)*q(3) - q(0)*q(2)),
+        2.0f * (q(0)*q(1) + q(2)*q(3)),
+        q(0)*q(0) - q(1)*q(1) - q(2)*q(2) + q(3)*q(3)
     };
 }
 
@@ -67,20 +67,39 @@ void ImuEKF::predict(const Eigen::Vector3f &gyro)
 
     Eigen::Vector3f w = gyro - bg;
 
-    Eigen::Vector4f qdot;
-    qdot << 
-        0.5f * ( w(0)*q(3) + w(1)*q(2) - w(2)*q(1)),
-        0.5f * (-w(0)*q(2) + w(1)*q(3) + w(2)*q(0)),
-        0.5f * ( w(0)*q(1) - w(1)*q(0) + w(2)*q(3)),
-        0.5f * (-w(0)*q(0) - w(1)*q(1) - w(2)*q(2));
+    Eigen::Matrix4f Omega;
+    Omega << 
+         0,    -w(0), -w(1), -w(2),
+         w(0),  0,     w(2), -w(1),
+         w(1), -w(2),  0,     w(0),
+         w(2),  w(1), -w(0),  0;
 
-    q += qdot * dt;
+    q = q + 0.5f * Omega * q * dt;
     q.normalize();
 
     x.segment<4>(0) = q;
+    x.segment<3>(4) = bg;
 
-    Eigen::MatrixXf F = Eigen::MatrixXf::Identity(7,7);
-    Eigen::MatrixXf Q = Eigen::MatrixXf::Identity(7,7) * 0.001f;
+    Eigen::Matrix<float,7,7> F = Eigen::Matrix<float,7,7>::Identity();
+
+    float q0 = q(0);
+    float q1 = q(1);
+    float q2 = q(2);
+    float q3 = q(3);
+
+    Eigen::Matrix<float,4,3> G;
+    G << 
+        -q1, -q2, -q3,
+         q0, -q3,  q2,
+         q3,  q0, -q1,
+        -q2,  q1,  q0;
+
+    F.block<4,3>(0,4) = -0.5f * G * dt;
+
+    Eigen::Matrix<float,7,7> Q = Eigen::Matrix<float,7,7>::Zero();
+    Q.block<3,3>(0,0) = Eigen::Matrix3f::Identity() * 1e-6f;
+    Q.block<3,3>(4,4) = Eigen::Matrix3f::Identity() * 1e-6f;
+    Q(3,3) = 1e-6f;
 
     P = F * P * F.transpose() + Q;
 }
@@ -102,28 +121,71 @@ void ImuEKF::update(const Eigen::Vector3f &accel)
     Eigen::Matrix<float,3,7> H;
     H.setZero();
 
-    float eps = 1e-5f;
+    float q0 = q(0);
+    float q1 = q(1);
+    float q2 = q(2);
+    float q3 = q(3);
 
-    for (int i = 0; i < 4; i++) {
-        Eigen::Vector4f q_eps = q;
-        q_eps(i) += eps;
-        q_eps.normalize();
+    float q0q0 = q0*q0;
+    float q1q1 = q1*q1;
+    float q2q2 = q2*q2;
+    float q3q3 = q3*q3;
+    float q0q1 = q0*q1;
+    float q0q2 = q0*q2;
+    float q0q3 = q0*q3;
+    float q1q2 = q1*q2;
+    float q1q3 = q1*q3;
+    float q2q3 = q2*q3;
 
-        Eigen::Vector3f h_eps = gravityModel(q_eps);
-        h_eps.normalize();
+    float norm_h = sqrt(4.0f*(q1q3 - q0q2)*(q1q3 - q0q2) + 
+                        4.0f*(q0q1 + q2q3)*(q0q1 + q2q3) + 
+                        (q0q0 - q1q1 - q2q2 + q3q3)*(q0q0 - q1q1 - q2q2 + q3q3));
+    
+    float inv_norm = 1.0f / norm_h;
 
-        H.col(i) = (h_eps - h) / eps;
+    float dh_dq0 = 2.0f * (-q2 * inv_norm);
+    float dh_dq1 = 2.0f * (q3 * inv_norm);
+    float dh_dq2 = 2.0f * (-q0 * inv_norm);
+    float dh_dq3 = 2.0f * (q1 * inv_norm);
+    
+    H(0,0) = dh_dq0;
+    H(0,1) = dh_dq1;
+    H(0,2) = dh_dq2;
+    H(0,3) = dh_dq3;
+    
+    dh_dq0 = 2.0f * (q1 * inv_norm);
+    dh_dq1 = 2.0f * (q0 * inv_norm);
+    dh_dq2 = 2.0f * (q3 * inv_norm);
+    dh_dq3 = 2.0f * (q2 * inv_norm);
+    
+    H(1,0) = dh_dq0;
+    H(1,1) = dh_dq1;
+    H(1,2) = dh_dq2;
+    H(1,3) = dh_dq3;
+    
+    dh_dq0 = 2.0f * (q0 * inv_norm);
+    dh_dq1 = 2.0f * (-q1 * inv_norm);
+    dh_dq2 = 2.0f * (-q2 * inv_norm);
+    dh_dq3 = 2.0f * (q3 * inv_norm);
+    
+    H(2,0) = dh_dq0;
+    H(2,1) = dh_dq1;
+    H(2,2) = dh_dq2;
+    H(2,3) = dh_dq3;
+
+    for (int i = 4; i < 7; i++) {
+        H.col(i).setZero();
     }
 
-    Eigen::Matrix3f R = Eigen::Matrix3f::Identity() * 0.05f;
+    Eigen::Matrix3f R = Eigen::Matrix3f::Identity() * 0.02f;
 
     Eigen::Matrix3f S = H * P * H.transpose() + R;
     Eigen::Matrix<float,7,3> K = P * H.transpose() * S.inverse();
 
     x = x + K * y;
 
-    Eigen::MatrixXf I = Eigen::MatrixXf::Identity(7,7);
-    P = (I - K * H) * P;
+    Eigen::Matrix<float,7,7> I = Eigen::Matrix<float,7,7>::Identity();
+    P = (I - K * H) * P * (I - K * H).transpose() + K * R * K.transpose();
 
     Eigen::Vector4f q_new = x.segment<4>(0);
     q_new.normalize();

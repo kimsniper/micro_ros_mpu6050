@@ -101,7 +101,6 @@ void ImuNode::calibrate()
         MPU6050::Mpu6050_GyroData_t g;
         
         if (mpu->Mpu6050_GetGyroData(g) == Mpu6050_Error_t::MPU6050_OK) {
-            // Convert to rad/s for bias calculation
             gyroBias(0) += g.Gyro_X * M_PI / 180.0f;
             gyroBias(1) += g.Gyro_Y * M_PI / 180.0f;
             gyroBias(2) += g.Gyro_Z * M_PI / 180.0f;
@@ -158,18 +157,19 @@ void ImuNode::spin()
                 (gyro.Gyro_Y * M_PI / 180.0f),
                 (gyro.Gyro_Z * M_PI / 180.0f);
         
+        g -= gyroBias;
+        
         Eigen::Vector3f a;
         a << acc.Accel_X,
              acc.Accel_Y,
              acc.Accel_Z;
         
         float norm = a.norm();
-        bool accel_valid = (norm > 5.0f && norm < 15.0f);
+        bool accel_valid = (fabs(norm - 9.81f) < 0.5f);
         
         if (accel_valid) {
-            // Normalize for orientation estimation
             Eigen::Vector3f a_norm = a.normalized();
-            accel_fused = 0.9f * accel_fused + 0.1f * a_norm;
+            accel_fused = 0.7f * accel_fused + 0.3f * a_norm;
         }
         
         ekf.predict(g);
