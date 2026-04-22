@@ -46,6 +46,24 @@ static MPU6050::Device Dev = {
     .i2cAddress = MPU6050::I2C_ADDRESS_MPU6050_AD0_L
 };
 
+static void quaternionToEuler(float qx, float qy, float qz, float qw, 
+                               float &roll, float &pitch, float &yaw) {
+    float sinr_cosp = 2.0f * (qw * qx + qy * qz);
+    float cosr_cosp = 1.0f - 2.0f * (qx * qx + qy * qy);
+    roll = std::atan2(sinr_cosp, cosr_cosp);
+    
+    float sinp = 2.0f * (qw * qy - qz * qx);
+    if (std::abs(sinp) >= 1.0f) {
+        pitch = std::copysign(M_PI / 2.0f, sinp);
+    } else {
+        pitch = std::asin(sinp);
+    }
+    
+    float siny_cosp = 2.0f * (qw * qz + qx * qy);
+    float cosy_cosp = 1.0f - 2.0f * (qy * qy + qz * qz);
+    yaw = std::atan2(siny_cosp, cosy_cosp);
+}
+
 void ImuNode::init(rclc_support_t *support, rcl_allocator_t *allocator)
 {
     rcl_node_t node;
@@ -113,15 +131,21 @@ void ImuNode::calibrate()
     
     ESP_LOGI(TAG, "Gyro bias (rad/s): X=%.6f, Y=%.6f, Z=%.6f", 
              gyroBias(0), gyroBias(1), gyroBias(2));
+    ESP_LOGI(TAG, "Gyro bias (deg/s): X=%.2f, Y=%.2f, Z=%.2f", 
+             gyroBias(0) * 180.0f / M_PI, 
+             gyroBias(1) * 180.0f / M_PI, 
+             gyroBias(2) * 180.0f / M_PI);
 }
 
 void ImuNode::spin()
 {
     auto prev = std::chrono::steady_clock::now();
+    auto last_log_time = std::chrono::steady_clock::now();
     
     static Eigen::Vector3f accel_fused = Eigen::Vector3f::Zero();
     
     float dt_filtered = 0.01f;
+    int log_counter = 0;
     
     while (true) {
         
@@ -179,6 +203,31 @@ void ImuNode::spin()
         }
         
         const auto &q = ekf.getQuaternion();
+        
+        float roll_rad, pitch_rad, yaw_rad;
+        quaternionToEuler(q(0), q(1), q(2), q(3), roll_rad, pitch_rad, yaw_rad);
+        
+        float roll_deg = roll_rad * 180.0f / M_PI;
+        float pitch_deg = pitch_rad * 180.0f / M_PI;
+        float yaw_deg = yaw_rad * 180.0f / M_PI;
+        
+        auto log_now = std::chrono::steady_clock::now();
+        auto log_elapsed = std::chrono::duration<float>(log_now - last_log_time).count();
+        
+        if (log_elapsed >= 0.5f) {
+            ESP_LOGI(TAG, "Euler Angles (deg) | Roll: %+7.2f | Pitch: %+7.2f | Yaw: %+7.2f | dt=%.3fs",
+                     roll_deg, pitch_deg, yaw_deg, dt_filtered);
+            
+            log_counter++;
+            if (log_counter % 50 == 0) {
+                ESP_LOGI(TAG, "Raw Gyro (deg/s) | X: %+7.2f | Y: %+7.2f | Z: %+7.2f",
+                         gyro.Gyro_X, gyro.Gyro_Y, gyro.Gyro_Z);
+                ESP_LOGI(TAG, "Raw Accel (m/s²) | X: %+7.2f | Y: %+7.2f | Z: %+7.2f | Norm: %.2f",
+                         acc.Accel_X, acc.Accel_Y, acc.Accel_Z, norm);
+            }
+            
+            last_log_time = log_now;
+        }
         
         msg.orientation.x = q(0);
         msg.orientation.y = q(1);
